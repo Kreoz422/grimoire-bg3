@@ -86,29 +86,77 @@ function svgIcon(name) {
   return `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icons[name]||""}</svg>`;
 }
 
-/* ---------- URL-safe compact encode/decode ---------- */
+/* ---------- URL-safe compact encode/decode (with compression) ---------- */
 function compactBuild(b) {
   // already compact keys; just clone and strip runtime fields
   const c = JSON.parse(JSON.stringify(b));
   delete c.sc;
   return c;
 }
-function encodeBuildToLink(build) {
+function bytesToBase64Url(bytes) {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+function base64UrlToBytes(b64) {
+  let s = b64.replace(/-/g, "+").replace(/_/g, "/");
+  while (s.length % 4) s += "=";
+  const binary = atob(s);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+async function compressToBytes(str) {
+  if (!("CompressionStream" in window)) return null;
+  const stream = new Blob([str]).stream().pipeThrough(new CompressionStream("gzip"));
+  const buf = await new Response(stream).arrayBuffer();
+  return new Uint8Array(buf);
+}
+async function decompressFromBytes(bytes) {
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
+  const buf = await new Response(stream).arrayBuffer();
+  return new TextDecoder().decode(buf);
+}
+
+async function encodeBuildToLink(build) {
   const json = JSON.stringify(compactBuild(build));
-  const b64 = btoa(unescape(encodeURIComponent(json)))
-    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/,"");
+  let prefix = "r";
+  let payload = null;
+  try {
+    const compressed = await compressToBytes(json);
+    if (compressed) { prefix = "z"; payload = bytesToBase64Url(compressed); }
+  } catch (e) { /* fall through to raw */ }
+  if (!payload) {
+    payload = btoa(unescape(encodeURIComponent(json))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
   const url = new URL(location.href);
-  url.hash = "b=" + b64;
+  url.hash = "b=" + prefix + "." + payload;
   return url.toString();
 }
-function decodeBuildFromHash(hash) {
+
+async function decodeBuildFromHash(hash) {
   const m = /b=([^&]+)/.exec(hash || "");
   if (!m) return null;
-  let b64 = m[1].replace(/-/g, "+").replace(/_/g, "/");
-  while (b64.length % 4) b64 += "=";
+  const raw = m[1];
+  let prefix, payload;
+  if (raw.length > 1 && raw[1] === "." && (raw[0] === "z" || raw[0] === "r")) {
+    prefix = raw[0];
+    payload = raw.slice(2);
+  } else {
+    prefix = "r"; // legacy links shared before compression was added
+    payload = raw;
+  }
   try {
-    const json = decodeURIComponent(escape(atob(b64)));
-    return JSON.parse(json);
+    if (prefix === "z") {
+      const bytes = base64UrlToBytes(payload);
+      const json = await decompressFromBytes(bytes);
+      return JSON.parse(json);
+    } else {
+      let b64 = payload.replace(/-/g, "+").replace(/_/g, "/");
+      while (b64.length % 4) b64 += "=";
+      const json = decodeURIComponent(escape(atob(b64)));
+      return JSON.parse(json);
+    }
   } catch (e) { return null; }
 }
 
@@ -181,8 +229,9 @@ function duplicateBuild(id) {
 }
 
 /* ---------- share flow ---------- */
-function shareBuildFlow(build) {
-  const link = encodeBuildToLink(build);
+async function shareBuildFlow(build) {
+  toast("Génération du lien…");
+  const link = await encodeBuildToLink(build);
   showShareModal(build, link);
 }
 function showShareModal(build, link) {
@@ -640,9 +689,9 @@ function renderSummary(b) {
 }
 
 /* ---------- import (from URL hash) ---------- */
-function checkHashForImport() {
+async function checkHashForImport() {
   if (!location.hash) return;
-  const incoming = decodeBuildFromHash(location.hash);
+  const incoming = await decodeBuildFromHash(location.hash);
   if (!incoming || !incoming.n) return;
   state.pendingImport = incoming;
   showImportModal(incoming);
@@ -676,7 +725,7 @@ function showImportModal(build) {
 }
 
 /* ---------- import from pasted link / file ---------- */
-function importFromPastedLink(text) {
+async function importFromPastedLink(text) {
   const errEl = document.getElementById("import-error");
   errEl.style.display = "none";
   let hash = "";
@@ -686,7 +735,7 @@ function importFromPastedLink(text) {
   } catch (e) {
     hash = text.includes("b=") ? text.slice(text.indexOf("b=") - 1) : "";
   }
-  const build = decodeBuildFromHash(hash);
+  const build = await decodeBuildFromHash(hash);
   if (!build || !build.n) {
     errEl.textContent = "Ce lien ne semble pas contenir de build valide.";
     errEl.style.display = "flex";
