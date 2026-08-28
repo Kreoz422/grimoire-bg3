@@ -1,0 +1,17 @@
+{
+  "name": "Grimoire de Builds — Baldur's Gate 3",
+  "short_name": "Grimoire BG3",
+  "description": "Gestionnaire de builds personnels pour Baldur's Gate 3",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#12141c",
+  "theme_color": "#12141c",
+  "orientation": "portrait-primary",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
