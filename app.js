@@ -137,7 +137,7 @@ async function encodeBuildToLink(build) {
 async function decodeBuildFromHash(hash) {
   const m = /b=([^&]+)/.exec(hash || "");
   if (!m) return null;
-  const raw = m[1];
+  const raw = m[1].replace(/\s+/g, "");
   let prefix, payload;
   if (raw.length > 1 && raw[1] === "." && (raw[0] === "z" || raw[0] === "r")) {
     prefix = raw[0];
@@ -728,12 +728,13 @@ function showImportModal(build) {
 async function importFromPastedLink(text) {
   const errEl = document.getElementById("import-error");
   errEl.style.display = "none";
+  const clean = (text || "").replace(/\s+/g, ""); // tolerate stray spaces/line breaks from copy-paste
   let hash = "";
   try {
-    const url = new URL(text.trim());
+    const url = new URL(clean);
     hash = url.hash;
   } catch (e) {
-    hash = text.includes("b=") ? text.slice(text.indexOf("b=") - 1) : "";
+    hash = clean.includes("b=") ? clean.slice(clean.indexOf("b=") - 1) : "";
   }
   const build = await decodeBuildFromHash(hash);
   if (!build || !build.n) {
