@@ -80,6 +80,8 @@ function svgIcon(name) {
     back: '<polyline points="15 18 9 12 15 6"/>',
     plus: '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
     check: '<polyline points="20 6 9 17 4 12"/>',
+    eye: '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z"/><circle cx="12" cy="12" r="3"/>',
+    sword: '<path d="M14.5 17.5 3 6V3h3l11.5 11.5"/><path d="M13 19l6-6"/><path d="M16 16l4 4"/><path d="M19 21l2-2"/>',
   };
   return `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icons[name]||""}</svg>`;
 }
@@ -144,7 +146,8 @@ function renderList() {
         ${(b.tg||[]).map(t => `<span class="pill">${esc(t)}</span>`).join("")}
       </div>
       <div class="card-actions">
-        <button class="mini-btn" data-act="open" data-id="${b.id}">${svgIcon("edit")} Ouvrir</button>
+        <button class="mini-btn" data-act="view" data-id="${b.id}">${svgIcon("eye")} Voir la fiche</button>
+        <button class="mini-btn" data-act="open" data-id="${b.id}">${svgIcon("edit")} Modifier</button>
         <button class="mini-btn" data-act="dup" data-id="${b.id}">${svgIcon("copy")} Dupliquer</button>
         <button class="mini-btn" data-act="share" data-id="${b.id}">${svgIcon("share")} Partager</button>
         <button class="mini-btn danger" data-act="del" data-id="${b.id}">${svgIcon("trash")} Suppr.</button>
@@ -157,6 +160,7 @@ function renderList() {
       e.stopPropagation();
       const id = btn.dataset.id;
       const act = btn.dataset.act;
+      if (act === "view") showSummary(state.builds[id]);
       if (act === "open") openEditor(state.builds[id]);
       if (act === "dup") duplicateBuild(id);
       if (act === "share") shareBuildFlow(state.builds[id]);
@@ -164,7 +168,7 @@ function renderList() {
     });
   });
   wrap.querySelectorAll(".build-card").forEach(card => {
-    card.addEventListener("click", () => openEditor(state.builds[card.dataset.id]));
+    card.addEventListener("click", () => showSummary(state.builds[card.dataset.id]));
   });
 }
 
@@ -391,6 +395,16 @@ function renderGearList() {
       </div>
       <span class="field-label">Objet</span>
       <input class="text-input" data-gear="${idx}" data-f="item" value="${esc(g.item)}" placeholder="ex. Gants de capture d'âme" />
+      <div class="gear-top" style="margin-top:8px;">
+        <div>
+          <span class="field-label">Lieu précis</span>
+          <input class="text-input" data-gear="${idx}" data-f="loc" value="${esc(g.loc||"")}" placeholder="ex. Aigreterre" />
+        </div>
+        <div>
+          <span class="field-label">Comment l'obtenir</span>
+          <input class="text-input" data-gear="${idx}" data-f="how" value="${esc(g.how||"")}" placeholder="ex. vendu par le marchand, quête X, coffre…" />
+        </div>
+      </div>
       <span class="field-label" style="margin-top:8px;">Effet</span>
       <textarea class="text-area" data-gear="${idx}" data-f="effect" placeholder="ce que ça apporte au build">${esc(g.effect)}</textarea>
       <span class="field-label" style="margin-top:8px;">Alternative (optionnel)</span>
@@ -462,7 +476,7 @@ function bindEditorEvents() {
   });
 
   document.getElementById("add-gear").addEventListener("click", () => {
-    d.ge.push({ act: ACTS[0], slot: SLOTS[0], item: "", effect: "", alt: "" });
+    d.ge.push({ act: ACTS[0], slot: SLOTS[0], item: "", loc: "", how: "", effect: "", alt: "" });
     renderGearList();
   });
   document.getElementById("add-pf").addEventListener("click", () => { d.pf.push(""); renderStringList("pf-list", d.pf, "pf"); });
@@ -471,13 +485,158 @@ function bindEditorEvents() {
   document.getElementById("editor-save").addEventListener("click", () => {
     persist(d);
     toast("Build sauvegardé");
-    switchTab("list");
-    renderList();
+    showSummary(d);
   });
   document.getElementById("editor-share").addEventListener("click", () => {
     persist(d);
     shareBuildFlow(d);
   });
+}
+
+/* ---------- summary sheet ---------- */
+function computePhases(lv) {
+  const phases = [];
+  let current = null;
+  lv.forEach(entry => {
+    const cls = entry.c || "";
+    if (!cls && !entry.f && !entry.s && !entry.af) return; // fully empty level, skip in phase grouping
+    if (!current || current.class !== cls) {
+      current = { class: cls || "Non défini", from: entry.l, to: entry.l, subclasses: [], features: [] };
+      phases.push(current);
+    } else {
+      current.to = entry.l;
+    }
+    if (entry.s && !current.subclasses.includes(entry.s)) current.subclasses.push(entry.s);
+    if (entry.f) current.features.push({ level: entry.l, text: entry.f });
+  });
+  return phases;
+}
+function computeMilestones(lv) {
+  return lv.filter(e => MILESTONES.has(e.l) && e.af).map(e => ({ level: e.l, text: e.af }));
+}
+function groupGearByAct(ge) {
+  const map = {};
+  ACTS.forEach(a => map[a] = []);
+  (ge || []).forEach(g => {
+    const act = ACTS.includes(g.act) ? g.act : "Tout le jeu";
+    map[act].push(g);
+  });
+  return map;
+}
+
+function showSummary(build) {
+  state.draft = build;
+  renderSummary(build);
+  switchTab("summary");
+}
+
+function renderSummary(b) {
+  const view = document.getElementById("view-summary");
+  const phases = computePhases(b.lv);
+  const milestones = computeMilestones(b.lv);
+  const gearByAct = groupGearByAct(b.ge);
+  const classLine = phases.filter(p => p.class !== "Non défini")
+    .map(p => `${esc(p.class)} ${p.to - p.from + 1}`).join(" — ");
+
+  view.innerHTML = `
+    <div class="editor-header">
+      <button class="back-btn" id="summary-back">${svgIcon("back")}</button>
+      <div class="summary-title-block">
+        <h2 class="summary-name">${esc(b.n)}</h2>
+        ${classLine ? `<div class="summary-classline">${classLine}</div>` : ""}
+      </div>
+    </div>
+
+    ${(b.r || b.mc) ? `<div class="summary-tagrow">
+      ${b.mc ? `<span class="pill bronze">${esc(b.mc)}</span>` : ""}
+      ${b.r ? `<span class="pill">${esc(b.r)}</span>` : ""}
+      ${(b.tg||[]).map(t=>`<span class="pill">${esc(t)}</span>`).join("")}
+    </div>` : ""}
+
+    <div class="summary-stats-row">
+      ${STATS.map(([k,label]) => `
+        <div class="summary-stat"><span class="ss-label">${label}</span><span class="ss-val">${b.st[k]}</span></div>
+      `).join("")}
+    </div>
+    ${b.sn ? `<p class="summary-note">${esc(b.sn)}</p>` : ""}
+
+    ${phases.length ? `
+      <div class="section-title">Progression</div>
+      <div class="phase-grid">
+        ${phases.map(p => `
+          <div class="phase-block">
+            <div class="phase-head">
+              <span class="phase-range">Niv. ${p.from}${p.to!==p.from ? "–"+p.to : ""}</span>
+              <span class="phase-class">${esc(p.class)}${p.subclasses.length ? " · " + p.subclasses.map(esc).join(", ") : ""}</span>
+            </div>
+            ${p.features.length ? `<ul class="phase-features">
+              ${p.features.map(f => `<li><b>Niv. ${f.level}</b> — ${esc(f.text)}</li>`).join("")}
+            </ul>` : ""}
+          </div>
+        `).join("")}
+      </div>
+    ` : ""}
+
+    ${milestones.length ? `
+      <div class="section-title">Dons / +2 caractéristiques</div>
+      <div class="milestone-row">
+        ${milestones.map(m => `<div class="milestone-chip"><span>Niv. ${m.level}</span>${esc(m.text)}</div>`).join("")}
+      </div>
+    ` : ""}
+
+    ${b.sk ? `<div class="section-title">Compétences</div><p class="summary-note">${esc(b.sk)}</p>` : ""}
+
+    ${Object.values(gearByAct).some(arr => arr.length) ? `
+      <div class="section-title">Équipement</div>
+      ${ACTS.filter(a => gearByAct[a].length).map(act => `
+        <div class="gear-act-block">
+          <div class="gear-act-label">${esc(act)}</div>
+          <div class="gear-summary-grid">
+            ${gearByAct[act].map(g => `
+              <div class="gear-summary-card">
+                <div class="gsc-top"><span class="gsc-slot">${esc(g.slot)}</span></div>
+                <div class="gsc-item">${esc(g.item || "—")}</div>
+                ${(g.loc || g.how) ? `<div class="gsc-loc">${g.loc ? `<b>${esc(g.loc)}</b>` : ""}${g.loc && g.how ? " — " : ""}${g.how ? esc(g.how) : ""}</div>` : ""}
+                ${g.effect ? `<div class="gsc-effect">${esc(g.effect)}</div>` : ""}
+                ${g.alt ? `<div class="gsc-alt">Alt. : ${esc(g.alt)}</div>` : ""}
+              </div>
+            `).join("")}
+          </div>
+        </div>
+      `).join("")}
+    ` : ""}
+
+    ${b.cs ? `<div class="section-title">Consommables</div><p class="summary-note">${esc(b.cs)}</p>` : ""}
+
+    ${(b.pf.length || b.pw.length) ? `
+      <div class="section-title">Bilan</div>
+      <div class="grid-2">
+        <div>
+          <div class="bilan-label good">Points forts</div>
+          <ul class="bilan-list">${b.pf.map(x=>`<li>${esc(x)}</li>`).join("")}</ul>
+        </div>
+        <div>
+          <div class="bilan-label bad">Points faibles</div>
+          <ul class="bilan-list">${b.pw.map(x=>`<li>${esc(x)}</li>`).join("")}</ul>
+        </div>
+      </div>
+    ` : ""}
+
+    ${b.pl ? `<div class="section-title">Style de jeu</div><p class="summary-note">${esc(b.pl)}</p>` : ""}
+
+    ${(b.src || b.sa) ? `<p class="summary-source">Guide original${b.sa ? " · " + esc(b.sa) : ""}${b.src ? ` · <a href="${esc(b.src)}" target="_blank" rel="noopener">lien</a>` : ""}</p>` : ""}
+
+    <div class="actions-bar">
+      <button class="btn ghost" id="summary-toclose">Retour à mes builds</button>
+      <button class="btn" id="summary-share">${svgIcon("share")} Partager</button>
+      <button class="btn primary" id="summary-edit">${svgIcon("edit")} Modifier</button>
+    </div>
+  `;
+
+  document.getElementById("summary-back").addEventListener("click", () => { switchTab("list"); renderList(); });
+  document.getElementById("summary-toclose").addEventListener("click", () => { switchTab("list"); renderList(); });
+  document.getElementById("summary-share").addEventListener("click", () => shareBuildFlow(b));
+  document.getElementById("summary-edit").addEventListener("click", () => openEditor(b));
 }
 
 /* ---------- import (from URL hash) ---------- */
@@ -507,9 +666,8 @@ function showImportModal(build) {
     persist(copy);
     overlay.style.display = "none";
     history.replaceState(null, "", location.pathname + location.search);
-    switchTab("list");
-    renderList();
     toast("Build ajouté à ta bibliothèque");
+    showSummary(copy);
   };
   document.getElementById("btn-import-reject").onclick = () => {
     overlay.style.display = "none";
@@ -572,9 +730,10 @@ function importFromFile(file) {
 /* ---------- tabs / views ---------- */
 function switchTab(tab) {
   state.view = tab;
-  document.querySelectorAll(".tab-btn").forEach(b => b.classList.toggle("active", b.dataset.tab === tab || (tab==="editor" && b.dataset.tab==="list")));
+  document.querySelectorAll(".tab-btn").forEach(b => b.classList.toggle("active", b.dataset.tab === tab || ((tab==="editor"||tab==="summary") && b.dataset.tab==="list")));
   document.getElementById("view-list").style.display = tab === "list" ? "block" : "none";
   document.getElementById("view-editor").style.display = tab === "editor" ? "block" : "none";
+  document.getElementById("view-summary").style.display = tab === "summary" ? "block" : "none";
   document.getElementById("view-import").style.display = tab === "import" ? "block" : "none";
   window.scrollTo(0,0);
 }
