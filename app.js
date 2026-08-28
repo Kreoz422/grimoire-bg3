@@ -767,7 +767,17 @@ function init() {
   checkHashForImport();
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js").catch(() => {});
+    navigator.serviceWorker.register("sw.js").then((reg) => {
+      reg.addEventListener("updatefound", () => {
+        const fresh = reg.installing;
+        if (!fresh) return;
+        fresh.addEventListener("statechange", () => {
+          if (fresh.state === "activated") {
+            location.reload();
+          }
+        });
+      });
+    }).catch(() => {});
   }
 }
 
